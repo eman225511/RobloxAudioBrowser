@@ -34,7 +34,7 @@ class RobloxAudioBrowser:
         # Default Roblox cache paths
         self.default_paths = [
             os.path.expandvars(r"%LOCALAPPDATA%\Roblox\http"),
-            os.path.expandvars(r"%TEMP%\Roblox\http")
+	    os.path.expandvars(r"%TEMP%\Roblox\http")
         ]
         
         self.create_widgets()
@@ -83,6 +83,21 @@ class RobloxAudioBrowser:
             pady=5
         )
         self.custom_button.pack(side="left", padx=5)
+        
+        # Clear cache button
+        self.clear_cache_button = tk.Button(
+            control_frame,
+            text="🗑️ Clear Cache",
+            command=self.clear_cache,
+            bg="#FF9800",
+            fg="white",
+            font=("Arial", 12, "bold"),
+            relief="raised",
+            bd=2,
+            padx=20,
+            pady=5
+        )
+        self.clear_cache_button.pack(side="left", padx=5)
         
         # Cancel scan button
         self.cancel_button = tk.Button(
@@ -334,6 +349,7 @@ class RobloxAudioBrowser:
         """Scan Roblox cache directories for audio files using multi-threading."""
         self.scan_button.config(state="disabled")
         self.custom_button.config(state="disabled")
+        self.clear_cache_button.config(state="disabled")
         self.cancel_button.config(state="normal")
         self.scan_cancelled = False
         self.progress.config(value=0)
@@ -472,6 +488,7 @@ class RobloxAudioBrowser:
         """Handle scan cancellation."""
         self.scan_button.config(state="normal")
         self.custom_button.config(state="normal")
+        self.clear_cache_button.config(state="normal")
         self.cancel_button.config(state="disabled")
         self.progress.config(value=0)
         self.status_label.config(text="Scan cancelled")
@@ -511,6 +528,7 @@ class RobloxAudioBrowser:
         self.progress.config(value=100)
         self.scan_button.config(state="normal")
         self.custom_button.config(state="normal")
+        self.clear_cache_button.config(state="normal")
         self.cancel_button.config(state="disabled")
         self.status_label.config(text=f"Scan complete! Found {len(found_files)} audio files")
         
@@ -532,6 +550,7 @@ class RobloxAudioBrowser:
         if folder_path:
             self.scan_button.config(state="disabled")
             self.custom_button.config(state="disabled")
+            self.clear_cache_button.config(state="disabled")
             self.cancel_button.config(state="normal")
             self.scan_cancelled = False
             self.progress.config(value=0)
@@ -649,6 +668,7 @@ class RobloxAudioBrowser:
         self.progress.config(value=100)
         self.scan_button.config(state="normal")
         self.custom_button.config(state="normal")
+        self.clear_cache_button.config(state="normal")
         self.cancel_button.config(state="disabled")
         self.status_label.config(text=f"Custom scan complete! Found {len(found_files)} audio files in {os.path.basename(folder_path)}")
         
@@ -657,6 +677,96 @@ class RobloxAudioBrowser:
         else:
             # Trigger info panel update to show collection stats
             self.on_file_select(None)
+    
+    def clear_cache(self):
+        """Clear Roblox cache directories."""
+        # Confirm with user
+        result = messagebox.askyesno(
+            "Clear Cache", 
+            "This will delete all files in Roblox cache directories.\n\n"
+            "This action cannot be undone. Are you sure you want to continue?",
+            icon='warning'
+        )
+        
+        if not result:
+            return
+        
+        # Stop any playing audio first
+        self.stop_audio()
+        
+        # Clear the current file list
+        self.audio_files = []
+        self.populate_listbox()
+        
+        self.status_label.config(text="Clearing Roblox cache...")
+        
+        # Run clearing in separate thread to avoid blocking UI
+        threading.Thread(
+            target=self._clear_cache_thread,
+            daemon=True
+        ).start()
+    
+    def _clear_cache_thread(self):
+        """Thread function for clearing cache directories."""
+        cleared_files = 0
+        errors = []
+        
+        for cache_path in self.default_paths:
+            if os.path.exists(cache_path):
+                self.root.after(0, lambda p=cache_path: self.status_label.config(
+                    text=f"Clearing cache: {os.path.basename(p)}..."
+                ))
+                
+                try:
+                    # Walk through the directory and delete all files
+                    for root, dirs, files in os.walk(cache_path):
+                        for file in files:
+                            if hasattr(self, 'scan_cancelled') and self.scan_cancelled:
+                                return
+                            
+                            file_path = os.path.join(root, file)
+                            try:
+                                os.remove(file_path)
+                                cleared_files += 1
+                                
+                                # Update status periodically
+                                if cleared_files % 100 == 0:
+                                    self.root.after(0, lambda c=cleared_files: self.status_label.config(
+                                        text=f"Cleared {c} files..."
+                                    ))
+                            except Exception as e:
+                                errors.append(f"Failed to delete {file}: {str(e)}")
+                                continue
+                        
+                        # Remove empty directories
+                        try:
+                            # Only remove if directory is empty
+                            if not os.listdir(root) and root != cache_path:
+                                os.rmdir(root)
+                        except:
+                            pass  # Ignore errors removing directories
+                            
+                except Exception as e:
+                    errors.append(f"Error accessing {cache_path}: {str(e)}")
+        
+        # Update UI in main thread
+        self.root.after(0, lambda: self._clear_cache_complete(cleared_files, errors))
+    
+    def _clear_cache_complete(self, cleared_files, errors):
+        """Complete the cache clearing operation."""
+        if errors:
+            error_msg = f"Cache clearing completed with {len(errors)} errors.\n"
+            error_msg += f"Cleared {cleared_files} files.\n\n"
+            error_msg += "Some errors occurred:\n"
+            error_msg += "\n".join(errors[:5])  # Show first 5 errors
+            if len(errors) > 5:
+                error_msg += f"\n... and {len(errors) - 5} more errors."
+            
+            messagebox.showwarning("Cache Cleared", error_msg)
+        else:
+            messagebox.showinfo("Cache Cleared", f"Successfully cleared {cleared_files} files from Roblox cache directories.")
+        
+        self.status_label.config(text="Cache cleared. Ready to scan...")
     
     def is_audio_file(self, file_path):
         """Check if file contains OGG audio data - optimized version."""
